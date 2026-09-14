@@ -10,8 +10,10 @@ import org.springframework.stereotype.Service;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.time.Instant;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,8 +26,12 @@ import java.util.stream.Collectors;
 @Service
 public class ShortUrlService {
     private final Map<String, ShortUrl> shortUrls = new ConcurrentHashMap<>();
+    private final Map<String, ShortUrl> redirectCache = new ConcurrentHashMap<>();
     private final Map<String, String> idempotencyIndex = new ConcurrentHashMap<>();
+    private final Map<String, Deque<Long>> requestHistory = new ConcurrentHashMap<>();
     private final AtomicInteger sequence = new AtomicInteger(1000);
+    private static final int MAX_REQUESTS_PER_MINUTE = 120;
+    private static final long RATE_LIMIT_WINDOW_MS = 60_000L;
 
     public List<ShortUrl> listLinks() {
         return shortUrls.values().stream()
@@ -74,6 +80,7 @@ public class ShortUrlService {
         );
 
         shortUrls.put(code, shortUrl);
+        redirectCache.put(code, shortUrl);
 
         if (request.idempotencyKey() != null && !request.idempotencyKey().isBlank()) {
             idempotencyIndex.put(request.idempotencyKey(), code);
@@ -83,19 +90,33 @@ public class ShortUrlService {
     }
 
     public ShortUrl getByCode(String code) {
+        if (code == null || code.isBlank()) {
+            return null;
+        }
+
+        ShortUrl cached = redirectCache.get(code);
+        if (cached != null && (cached.getExpiresAt() == null || !cached.getExpiresAt().isBefore(Instant.now()))) {
+            return cached;
+        }
+        redirectCache.remove(code);
+
         ShortUrl link = shortUrls.get(code);
         if (link == null) {
             return null;
         }
 
         if (link.getExpiresAt() != null && link.getExpiresAt().isBefore(Instant.now())) {
+            shortUrls.remove(code);
+            idempotencyIndex.values().removeIf(value -> value.equals(code));
             return null;
         }
 
+        redirectCache.put(code, link);
         return link;
     }
 
     public ShortUrl recordVisit(String code, String userAgent, String referrer, String ipAddress) {
+        enforceRateLimit(ipAddress);
         ShortUrl link = getByCode(code);
         if (link == null) {
             return null;
@@ -104,12 +125,15 @@ public class ShortUrlService {
         VisitEvent event = new VisitEvent(Instant.now(), userAgent, referrer, ipAddress);
         link.recordVisit(event);
         link.incrementClicks();
+        redirectCache.put(code, link);
         return link;
     }
 
     public void reset() {
         shortUrls.clear();
+        redirectCache.clear();
         idempotencyIndex.clear();
+        requestHistory.clear();
         sequence.set(1000);
     }
 
@@ -158,6 +182,25 @@ public class ShortUrlService {
                 referrers,
                 recent
         );
+    }
+
+    private void enforceRateLimit(String ipAddress) {
+        if (ipAddress == null || ipAddress.isBlank()) {
+            return;
+        }
+
+        String key = "ip:" + ipAddress;
+        Deque<Long> timestamps = requestHistory.computeIfAbsent(key, ignored -> new ArrayDeque<>());
+        long now = System.currentTimeMillis();
+        while (!timestamps.isEmpty() && now - timestamps.peekFirst() > RATE_LIMIT_WINDOW_MS) {
+            timestamps.pollFirst();
+        }
+
+        if (timestamps.size() >= MAX_REQUESTS_PER_MINUTE) {
+            throw new ApiException("Rate limit exceeded. Please retry later.");
+        }
+
+        timestamps.offerLast(now);
     }
 
     private String generateCode() {

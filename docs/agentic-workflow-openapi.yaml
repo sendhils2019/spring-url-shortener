@@ -1,0 +1,412 @@
+openapi: 3.0.3
+info:
+  title: Agentic Workflow API
+  version: 1.0.0
+  description: |
+    API contract for workflow orchestration, approval gates, retries, rollback,
+    fallback handling, and reliability metrics in the reference URL shortener.
+servers:
+  - url: http://localhost:8081
+paths:
+  /api/agent/workflows:
+    post:
+      summary: Create a workflow
+      operationId: createWorkflow
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowRequest'
+      responses:
+        '200':
+          description: Workflow created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+  /api/agent/workflows/{workflowId}:
+    get:
+      summary: Get workflow details
+      operationId: getWorkflow
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workflow details returned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+  /api/agent/workflows/{workflowId}/advance:
+    post:
+      summary: Advance the workflow graph by one execution tick
+      operationId: advanceWorkflow
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Workflow advanced
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+  /api/agent/workflows/{workflowId}/approve:
+    post:
+      summary: Approve or reject a stage
+      operationId: approveStage
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowApprovalRequest'
+      responses:
+        '200':
+          description: Approval processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowApprovalResponse'
+  /api/agent/workflows/{workflowId}/retry:
+    post:
+      summary: Retry a stage within its bounded retry budget
+      operationId: retryStage
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowRetryRequest'
+      responses:
+        '200':
+          description: Retry scheduled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+  /api/agent/workflows/{workflowId}/rollback:
+    post:
+      summary: Roll back the workflow to the specified stage
+      operationId: rollbackWorkflow
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowRollbackRequest'
+      responses:
+        '200':
+          description: Rollback initiated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+  /api/agent/workflows/{workflowId}/fallback:
+    post:
+      summary: Trigger a fallback to an alternate safe stage
+      operationId: fallbackWorkflow
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowFallbackRequest'
+      responses:
+        '200':
+          description: Fallback executed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+  /api/agent/workflows/{workflowId}/safe-stop:
+    post:
+      summary: Invoke a governance safe-stop
+      operationId: safeStopWorkflow
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WorkflowSafeStopRequest'
+      responses:
+        '200':
+          description: Safe-stop applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+  /api/agent/workflows/{workflowId}/replan:
+    post:
+      summary: Re-plan workflow after upstream output changes
+      operationId: replanWorkflow
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Re-plan applied
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowExecutionResponse'
+  /api/agent/workflows/{workflowId}/guardrails:
+    get:
+      summary: Fetch governance guardrails and audit trace
+      operationId: getGuardrails
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Guardrails and audit data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GuardrailResponse'
+  /api/agent/metrics:
+    get:
+      summary: Read aggregated workflow metrics
+      operationId: getWorkflowMetrics
+      responses:
+        '200':
+          description: Aggregated metrics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WorkflowMetricsResponse'
+components:
+  schemas:
+    WorkflowRequest:
+      type: object
+      required:
+        - requirement
+      properties:
+        requirement:
+          type: string
+          minLength: 1
+          example: Build a secure URL shortener with analytics and approval gates.
+        scope:
+          type: string
+          enum: [greenfield, brownfield, hybrid]
+          example: brownfield
+    WorkflowApprovalRequest:
+      type: object
+      required:
+        - stageId
+        - approved
+      properties:
+        stageId:
+          type: string
+          example: release-readiness
+        approved:
+          type: boolean
+          example: true
+        approver:
+          type: string
+          example: reviewer
+        rationale:
+          type: string
+          example: Security review passed and release risk is acceptable.
+    WorkflowRetryRequest:
+      type: object
+      required:
+        - stageId
+      properties:
+        stageId:
+          type: string
+          example: implementation
+    WorkflowRollbackRequest:
+      type: object
+      required:
+        - targetStageId
+      properties:
+        targetStageId:
+          type: string
+          example: task-decomposition
+    WorkflowFallbackRequest:
+      type: object
+      required:
+        - stageId
+      properties:
+        stageId:
+          type: string
+          example: implementation
+        reason:
+          type: string
+          example: Upstream dependency changed unexpectedly.
+    WorkflowSafeStopRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          example: Manual intervention required due to policy violation.
+    WorkflowStage:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        summary:
+          type: string
+        dependencies:
+          type: array
+          items:
+            type: string
+        requiresApproval:
+          type: boolean
+        status:
+          type: string
+        decision:
+          type: string
+        retryCount:
+          type: integer
+        maxRetries:
+          type: integer
+        progress:
+          type: integer
+        requiredProgress:
+          type: integer
+        branch:
+          type: string
+        syncGroup:
+          type: string
+        pathType:
+          type: string
+        entryGate:
+          type: string
+        exitGate:
+          type: string
+        fallbackStageId:
+          type: string
+    WorkflowExecutionResponse:
+      type: object
+      properties:
+        workflowId:
+          type: string
+        requirement:
+          type: string
+        scope:
+          type: string
+        status:
+          type: string
+        approvalState:
+          type: string
+        normalizedProblem:
+          type: string
+        stages:
+          type: array
+          items:
+            $ref: '#/components/schemas/WorkflowStage'
+        decisionLog:
+          type: array
+          items:
+            type: string
+        policyGuardrails:
+          type: array
+          items:
+            type: string
+        impactAnalysis:
+          type: array
+          items:
+            type: string
+        replanNotes:
+          type: array
+          items:
+            type: string
+        rollbackTarget:
+          type: string
+        safeStopReason:
+          type: string
+    WorkflowApprovalResponse:
+      type: object
+      properties:
+        workflowId:
+          type: string
+        status:
+          type: string
+        approvalState:
+          type: string
+        decisionLog:
+          type: array
+          items:
+            type: string
+    GuardrailResponse:
+      type: object
+      properties:
+        workflowId:
+          type: string
+        guardrails:
+          type: array
+          items:
+            type: string
+        impactAnalysis:
+          type: array
+          items:
+            type: string
+        auditTrail:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              type: string
+    WorkflowMetricsResponse:
+      type: object
+      properties:
+        successRate:
+          type: number
+          format: double
+        retryCount:
+          type: integer
+        rollbackCount:
+          type: integer
+        mttrMinutes:
+          type: number
+          format: double
+        endToEndLatencyMs:
+          type: integer

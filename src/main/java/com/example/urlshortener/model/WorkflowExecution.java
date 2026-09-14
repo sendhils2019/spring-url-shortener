@@ -2,7 +2,9 @@ package com.example.urlshortener.model;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class WorkflowExecution {
     private final String id;
@@ -15,6 +17,8 @@ public class WorkflowExecution {
     private String status;
     private String approvalState;
     private final List<String> decisionLog;
+    private final List<Map<String, String>> auditTrail;
+    private final Map<String, String> crossStageContext;
 
     // New fields required by controllers and services
     private List<String> policyGuardrails;
@@ -34,6 +38,8 @@ public class WorkflowExecution {
         this.status = "in_progress";
         this.approvalState = "pending";
         this.decisionLog = new ArrayList<>();
+        this.auditTrail = new ArrayList<>();
+        this.crossStageContext = new LinkedHashMap<>();
         this.policyGuardrails = new ArrayList<>();
         this.impactAnalysis = new ArrayList<>();
         this.replanNotes = new ArrayList<>();
@@ -93,9 +99,32 @@ public class WorkflowExecution {
         return decisionLog;
     }
 
+    public List<Map<String, String>> getAuditTrail() {
+        return auditTrail;
+    }
+
+    public Map<String, String> getCrossStageContext() {
+        return crossStageContext;
+    }
+
+    public void recordContext(String key, String value) {
+        if (key != null && !key.isBlank()) {
+            this.crossStageContext.put(key, value);
+        }
+    }
+
+    public void addAuditEntry(String stageId, String message) {
+        Map<String, String> record = new LinkedHashMap<>();
+        record.put("timestamp", Instant.now().toString());
+        record.put("stageId", stageId == null ? "workflow" : stageId);
+        record.put("message", message == null ? "" : message);
+        this.auditTrail.add(record);
+    }
+
     // Existing single-arg decision logger
     public void addDecision(String message) {
         this.decisionLog.add(message);
+        addAuditEntry("workflow", message);
     }
 
     // Overload used by services to prefix decisions with a stage id or context
@@ -104,7 +133,9 @@ public class WorkflowExecution {
             addDecision(message);
             return;
         }
-        this.decisionLog.add("[" + contextId + "] " + message);
+        String entry = "[" + contextId + "] " + message;
+        this.decisionLog.add(entry);
+        addAuditEntry(contextId, message);
     }
 
     // Policy guardrails

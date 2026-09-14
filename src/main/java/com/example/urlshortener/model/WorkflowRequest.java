@@ -1,4 +1,10 @@
 package com.example.urlshortener.model;
 
-public record WorkflowRequest(String requirement, String scope) {
+import jakarta.validation.constraints.NotBlank;
+
+public record WorkflowRequest(
+        @NotBlank(message = "Requirement is required")
+        String requirement,
+        String scope
+) {
 }

@@ -39,10 +39,20 @@ public class AgenticWorkflowService {
 
         workflow.setPolicyGuardrails(evaluatePolicyGuardrails(request.requirement(), scope));
         workflow.setImpactAnalysis(evaluateImpactAnalysis(scope, request.requirement()));
+        workflow.recordContext("scope", scope);
+        workflow.recordContext("normalizedProblem", normalizedProblem);
+        workflow.recordContext("executionMode", "stateful-graph");
         workflow.addDecision("Requirement normalized and scope classified as " + scope + ".");
         workflow.addDecision("Policy guardrails applied: " + String.join("; ", workflow.getPolicyGuardrails()));
         workflow.addDecision("Brownfield impact analysis: " + String.join("; ", workflow.getImpactAnalysis()));
-        workflow.addDecision("Task graph created with explicit dependency gates, parallel execution branches, synchronization stages, and approval checkpoints.");
+        workflow.addDecision("Task graph created with explicit dependency gates, parallel execution branches, synchronization stages, approval checkpoints, and audit lineage.");
+        workflow.getStages().forEach(stage -> {
+            stage.setContext("scope", scope);
+            stage.setContext("pathType", stage.getPathType());
+            stage.setContext("entryGate", stage.getEntryGate());
+            stage.setContext("exitGate", stage.getExitGate());
+            stage.setContext("syncGroup", stage.getSyncGroup());
+        });
         workflows.put(workflow.getId(), workflow);
         return workflow;
     }
@@ -63,7 +73,6 @@ public class AgenticWorkflowService {
         }
 
         boolean progressed = false;
-        // First pass: start any eligible stages (move pending -> running) to model parallel execution
         for (WorkflowStage stage : workflow.getStages()) {
             if (!"pending".equals(stage.getStatus())) {
                 continue;
@@ -73,7 +82,13 @@ public class AgenticWorkflowService {
                 continue;
             }
 
-            if (stage.isRequiresApproval() && !"approved".equals(stage.getDecision())) {
+            if (!isEntryGateSatisfied(stage, workflow)) {
+                workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' is waiting on entry gate '" + stage.getEntryGate() + "'.");
+                workflow.setStatus("waiting_for_gate");
+                continue;
+            }
+
+            if (stage.isRequiresApproval() && !"approved".equalsIgnoreCase(stage.getDecision())) {
                 workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' is waiting for human approval.");
                 workflow.setStatus("waiting_for_approval");
                 continue;
@@ -90,32 +105,30 @@ public class AgenticWorkflowService {
                 continue;
             }
 
-            // Eligible to start: mark as running. This allows multiple stages to be running in parallel.
             stage.setStatus("running");
             stage.setDecision("running");
+            workflow.recordContext(stage.getId() + ":status", "running");
             workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' started (running).");
             progressed = true;
         }
 
-        // Second pass: advance running stages (simulate work completion). Running stages require one or more advance ticks to finish.
         for (WorkflowStage stage : workflow.getStages()) {
             if (!"running".equals(stage.getStatus())) {
                 continue;
             }
 
-            // Simple progress simulation: increment progress and complete when reaching requiredProgress
             stage.incrementProgress();
             if (stage.getProgress() >= stage.getRequiredProgress()) {
                 stage.setStatus("completed");
                 stage.setDecision("executed");
-                workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' completed successfully.");
+                workflow.recordContext(stage.getId() + ":status", "completed");
+                workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' completed successfully and exited gate '" + stage.getExitGate() + "'.");
                 progressed = true;
             } else {
                 workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' progressing (" + stage.getProgress() + "/" + stage.getRequiredProgress() + ").");
             }
         }
 
-        // Handle retries for failed stages (allow restarting)
         for (WorkflowStage stage : workflow.getStages()) {
             if ("failed".equals(stage.getStatus()) && stage.getRetryCount() < stage.getMaxRetries()) {
                 stage.setStatus("pending");
@@ -126,14 +139,12 @@ public class AgenticWorkflowService {
             }
         }
 
-        // If all stages completed, mark workflow complete
         if (workflow.getStages().stream().allMatch(stage -> "completed".equals(stage.getStatus()))) {
             workflow.setStatus("completed");
             workflow.setApprovalState("closed");
             workflow.addDecision("All workflow stages finished. Release readiness approved and handoff closed.");
         }
 
-        // If any stage is blocked or safe-stopped, reflect global state
         if (workflow.getStages().stream().anyMatch(stage -> "blocked".equals(stage.getStatus()) || "safe-stop".equals(stage.getDecision()))) {
             workflow.setStatus("safe_stopped");
         }
@@ -188,6 +199,41 @@ public class AgenticWorkflowService {
         return workflow;
     }
 
+    public WorkflowExecution fallbackWorkflow(String workflowId, String stageId, String reason) {
+        WorkflowExecution workflow = getWorkflow(workflowId);
+        WorkflowStage stage = workflow.getStages().stream()
+                .filter(item -> item.getId().equals(stageId))
+                .findFirst()
+                .orElseThrow(() -> new ApiException("Fallback stage not found in workflow."));
+
+        String fallbackTarget = stage.getFallbackStageId() != null ? stage.getFallbackStageId() : "implementation";
+        stage.setStatus("fallback");
+        stage.setDecision("fallback");
+        stage.setRollbackTarget(fallbackTarget);
+        workflow.setStatus("fallback");
+        workflow.setRollbackTarget(fallbackTarget);
+        workflow.setSafeStopReason(reason == null || reason.isBlank() ? "Fallback executed due to upstream drift or failure." : reason);
+        workflow.addDecision(stage.getId(), "Fallback triggered for stage '" + stage.getName() + "'; reverted to '" + fallbackTarget + "'. Reason: " + workflow.getSafeStopReason());
+        workflow.setUpdatedAt(Instant.now());
+        return workflow;
+    }
+
+    public WorkflowExecution safeStopWorkflow(String workflowId, String reason) {
+        WorkflowExecution workflow = getWorkflow(workflowId);
+        workflow.setStatus("safe_stopped");
+        workflow.setApprovalState("rejected");
+        workflow.setSafeStopReason(reason == null || reason.isBlank() ? "Manual safe-stop was invoked." : reason);
+        workflow.addDecision("Safe-stop activated. Governance intervention required before any further stage progression.");
+        workflow.getStages().forEach(stage -> {
+            if (!"completed".equals(stage.getStatus())) {
+                stage.setStatus("blocked");
+                stage.setDecision("safe-stop");
+            }
+        });
+        workflow.setUpdatedAt(Instant.now());
+        return workflow;
+    }
+
     public WorkflowExecution rollbackWorkflow(String workflowId, String targetStageId) {
         WorkflowExecution workflow = getWorkflow(workflowId);
         WorkflowStage target = workflow.getStages().stream()
@@ -199,6 +245,7 @@ public class AgenticWorkflowService {
             if (stage.getId().equals(targetStageId)) {
                 stage.setStatus("pending");
                 stage.setDecision("rolled_back");
+                stage.setRollbackTarget(targetStageId);
                 workflow.setRollbackTarget(targetStageId);
                 workflow.addDecision(stage.getId(), "Rollback initiated to stage '" + stage.getName() + "'.");
                 continue;
@@ -228,6 +275,25 @@ public class AgenticWorkflowService {
         }
         if (workflow.getRequirement().toLowerCase().contains("security") || workflow.getRequirement().toLowerCase().contains("compliance") || workflow.getRequirement().toLowerCase().contains("policy")) {
             findings.add("Enforce secret scanning, dependency validation, and approval gating before release.");
+        }
+
+        if (workflow.getStages().stream().noneMatch(stage -> "risk-review".equals(stage.getId())) && !findings.isEmpty()) {
+            WorkflowStage riskReview = new WorkflowStage(
+                    "risk-review",
+                    "Risk Review",
+                    "Perform brownfield impact analysis, policy compliance review, and change control verification before release.",
+                    List.of("testing"),
+                    false,
+                    2,
+                    "governance",
+                    "synchronization",
+                    "synchronization",
+                    "testing",
+                    "risk-approved",
+                    "testing"
+            );
+            workflow.getStages().add(workflow.getStages().size() - 1, riskReview);
+            workflow.addDecision(riskReview.getId(), "Dynamic re-planning inserted a governance checkpoint because upstream findings changed the risk profile.");
         }
 
         if (!findings.isEmpty()) {
@@ -267,6 +333,39 @@ public class AgenticWorkflowService {
         return new WorkflowMetrics(successRate, retryCount, rollbackCount, mttrMinutes, endToEndLatencyMs);
     }
 
+    private boolean isEntryGateSatisfied(WorkflowStage stage, WorkflowExecution workflow) {
+        String entryGate = stage.getEntryGate();
+        if (entryGate == null || entryGate.isBlank()) {
+            return true;
+        }
+
+        if (entryGate.startsWith("requirements_")) {
+            return workflow.getStages().stream().anyMatch(item -> "requirement-analysis".equals(item.getId()) && "completed".equals(item.getStatus()));
+        }
+
+        if (entryGate.startsWith("plan_")) {
+            return workflow.getStages().stream().anyMatch(item -> "task-decomposition".equals(item.getId()) && "completed".equals(item.getStatus()));
+        }
+
+        if ("testing".equals(stage.getId())) {
+            return workflow.getStages().stream()
+                    .filter(item -> "implementation".equals(item.getId()) || "documentation".equals(item.getId()))
+                    .allMatch(item -> "completed".equals(item.getStatus()));
+        }
+
+        if ("risk-review".equals(stage.getId())) {
+            return workflow.getStages().stream().anyMatch(item -> "testing".equals(item.getId()) && "completed".equals(item.getStatus()));
+        }
+
+        if ("release-readiness".equals(stage.getId())) {
+            return workflow.getStages().stream()
+                    .filter(item -> "testing".equals(item.getId()) || "risk-review".equals(item.getId()))
+                    .allMatch(item -> item.getId() == null || "completed".equals(item.getStatus()));
+        }
+
+        return true;
+    }
+
     private boolean allDependenciesCompleted(WorkflowStage stage, Map<String, WorkflowStage> byId) {
         for (String dependencyId : stage.getDependencies()) {
             WorkflowStage dependency = byId.get(dependencyId);
@@ -288,22 +387,113 @@ public class AgenticWorkflowService {
 
     private List<WorkflowStage> buildStages(String scope, String requirement) {
         List<WorkflowStage> stages = new ArrayList<>();
-        stages.add(new WorkflowStage("requirement-analysis", "Requirement Analysis", "Interpret intent, identify ambiguity, and normalize into a clear engineering problem.", List.of(), false, 1, "discovery", "analysis"));
-        stages.add(new WorkflowStage("task-decomposition", "Task Decomposition", "Break the requirement into actionable tasks, sequencing, and dependency ordering.", List.of("requirement-analysis"), false, 1, "planning", "analysis"));
-        stages.add(new WorkflowStage("implementation", "Implementation", "Implement the URL shortener service and supporting API contracts.", List.of("task-decomposition"), false, 2, "delivery", "parallel"));
-        stages.add(new WorkflowStage("documentation", "Documentation", "Document design assumptions, trade-offs, and usage guidance.", List.of("task-decomposition"), false, 1, "documentation", "parallel"));
-        stages.add(new WorkflowStage("testing", "Testing", "Run critical validation, edge-case checks, integration verification, and synchronization across parallel branches.", List.of("implementation", "documentation"), false, 2, "verification", "synchronization"));
+        stages.add(new WorkflowStage(
+                "requirement-analysis",
+                "Requirement Analysis",
+                "Interpret intent, identify ambiguity, and normalize into a clear engineering problem.",
+                List.of(),
+                false,
+                1,
+                "discovery",
+                "analysis",
+                "sequential",
+                "requirement_received",
+                "requirements_normalized",
+                null
+        ));
+        stages.add(new WorkflowStage(
+                "task-decomposition",
+                "Task Decomposition",
+                "Break the requirement into actionable tasks, sequencing, and dependency ordering.",
+                List.of("requirement-analysis"),
+                false,
+                1,
+                "planning",
+                "analysis",
+                "sequential",
+                "requirements_normalized",
+                "plan_ready",
+                null
+        ));
+        stages.add(new WorkflowStage(
+                "implementation",
+                "Implementation",
+                "Implement the URL shortener service and supporting API contracts.",
+                List.of("task-decomposition"),
+                false,
+                2,
+                "delivery",
+                "parallel",
+                "parallel",
+                "plan_ready",
+                "implementation_complete",
+                "documentation"
+        ));
+        stages.add(new WorkflowStage(
+                "documentation",
+                "Documentation",
+                "Document design assumptions, trade-offs, and usage guidance.",
+                List.of("task-decomposition"),
+                false,
+                1,
+                "documentation",
+                "parallel",
+                "parallel",
+                "plan_ready",
+                "documentation_complete",
+                "implementation"
+        ));
+        stages.add(new WorkflowStage(
+                "testing",
+                "Testing",
+                "Run critical validation, edge-case checks, integration verification, and synchronization across parallel branches.",
+                List.of("implementation", "documentation"),
+                false,
+                2,
+                "verification",
+                "synchronization",
+                "synchronization",
+                "implementation_complete_and_documentation_complete",
+                "validation_passed",
+                null
+        ));
 
         boolean requiresRiskReview = scope.equals("brownfield") || requirement.toLowerCase().contains("brownfield") || requirement.toLowerCase().contains("security") || requirement.toLowerCase().contains("compliance") || requirement.toLowerCase().contains("policy") || requirement.toLowerCase().contains("ambiguous") || requirement.toLowerCase().contains("unclear");
         if (requiresRiskReview) {
-            stages.add(new WorkflowStage("risk-review", "Risk Review", "Perform brownfield impact analysis, policy compliance review, and change control verification before release.", List.of("testing"), false, 2, "governance", "synchronization"));
+            stages.add(new WorkflowStage(
+                    "risk-review",
+                    "Risk Review",
+                    "Perform brownfield impact analysis, policy compliance review, and change control verification before release.",
+                    List.of("testing"),
+                    false,
+                    2,
+                    "governance",
+                    "synchronization",
+                    "synchronization",
+                    "validation_passed",
+                    "risk_approved",
+                    "release-readiness"
+            ));
         }
 
         List<String> releaseDependencies = new ArrayList<>(List.of("testing"));
         if (requiresRiskReview) {
             releaseDependencies.add("risk-review");
         }
-        stages.add(new WorkflowStage("release-readiness", "Release Readiness", "Human approval gate to confirm governance, risk controls, and final readiness.", releaseDependencies, true, 2, "release", "approval"));
+        stages.add(new WorkflowStage(
+                "release-readiness",
+                "Release Readiness",
+                "Human approval gate to confirm governance, risk controls, and final readiness.",
+                releaseDependencies,
+                true,
+                2,
+                "release",
+                "approval",
+                "sequential",
+                "validation_passed",
+                "release_approved",
+                null
+        ));
         return stages;
     }
 

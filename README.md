@@ -55,6 +55,14 @@ The release-readiness stage requires human approval before progression. This dem
 - High-impact approval gates require explicit approval
 - Metrics are exposed to track reliability indicators such as success rate, retry count, rollback count, MTTR, and latency
 
+### Production-grade design notes
+
+- Input validation is enforced on workflow requests and approval payloads using Jakarta Bean Validation.
+- The workflow graph is stateful and governance-aware: each stage records entry/exit gates, sync groups, path types, and decision lineage.
+- Recovery behavior includes bounded retries, safe-stop, rollback, and fallback pathways. These are surfaced through explicit API endpoints and audit trail entries.
+- Short-link traffic includes basic reliability controls (rate limiting and cache-aware lookup) to keep the system stable under load.
+- The API contract is documented in `docs/agentic-workflow-openapi.yaml` for clearer change control and maintainability.
+
 ### Key decisions
 
 - Use in-memory storage for a demo-friendly prototype without introducing infrastructure complexity
