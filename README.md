@@ -45,6 +45,7 @@ Workflow stages:
 The release-readiness stage requires human approval before progression. This demonstrates controlled autonomy with governance and human-in-the-loop oversight.
 
 ### End-to-end integration flow
+<img width="8192" height="2047" alt="API Consumer Release-2026-09-14-040352" src="https://github.com/user-attachments/assets/b527430b-404a-4672-a5c2-3ffd60d39fdb" />
 
 ```mermaid
 flowchart LR
