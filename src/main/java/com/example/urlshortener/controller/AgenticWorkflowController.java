@@ -34,6 +34,9 @@ public class AgenticWorkflowController {
         payload.put("normalizedProblem", workflow.getNormalizedProblem());
         payload.put("stages", workflow.getStages());
         payload.put("status", workflow.getStatus());
+        payload.put("decisionLog", workflow.getDecisionLog());
+        payload.put("policyGuardrails", workflow.getPolicyGuardrails());
+        payload.put("impactAnalysis", workflow.getImpactAnalysis());
         return ResponseEntity.ok(payload);
     }
 
@@ -47,6 +50,8 @@ public class AgenticWorkflowController {
         payload.put("status", workflow.getStatus());
         payload.put("approvalState", workflow.getApprovalState());
         payload.put("decisionLog", workflow.getDecisionLog());
+        payload.put("policyGuardrails", workflow.getPolicyGuardrails());
+        payload.put("impactAnalysis", workflow.getImpactAnalysis());
         payload.put("stages", workflow.getStages());
         return ResponseEntity.ok(payload);
     }
@@ -70,6 +75,53 @@ public class AgenticWorkflowController {
         payload.put("status", workflow.getStatus());
         payload.put("approvalState", workflow.getApprovalState());
         payload.put("decisionLog", workflow.getDecisionLog());
+        return ResponseEntity.ok(payload);
+    }
+
+    @PostMapping("/workflows/{workflowId}/replan")
+    public ResponseEntity<Map<String, Object>> replanWorkflow(@PathVariable String workflowId) {
+        WorkflowExecution workflow = agenticWorkflowService.replanWorkflow(workflowId);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("workflowId", workflow.getId());
+        payload.put("status", workflow.getStatus());
+        payload.put("decisionLog", workflow.getDecisionLog());
+        payload.put("replanNotes", workflow.getReplanNotes());
+        payload.put("stages", workflow.getStages());
+        return ResponseEntity.ok(payload);
+    }
+
+    @PostMapping("/workflows/{workflowId}/retry")
+    public ResponseEntity<Map<String, Object>> retryStage(@PathVariable String workflowId, @RequestBody Map<String, String> body) {
+        String stageId = body.getOrDefault("stageId", "implementation");
+        WorkflowExecution workflow = agenticWorkflowService.retryStage(workflowId, stageId);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("workflowId", workflow.getId());
+        payload.put("status", workflow.getStatus());
+        payload.put("decisionLog", workflow.getDecisionLog());
+        payload.put("stages", workflow.getStages());
+        return ResponseEntity.ok(payload);
+    }
+
+    @PostMapping("/workflows/{workflowId}/rollback")
+    public ResponseEntity<Map<String, Object>> rollbackWorkflow(@PathVariable String workflowId, @RequestBody Map<String, String> body) {
+        String targetStageId = body.getOrDefault("targetStageId", "implementation");
+        WorkflowExecution workflow = agenticWorkflowService.rollbackWorkflow(workflowId, targetStageId);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("workflowId", workflow.getId());
+        payload.put("status", workflow.getStatus());
+        payload.put("rollbackTarget", workflow.getRollbackTarget());
+        payload.put("decisionLog", workflow.getDecisionLog());
+        payload.put("stages", workflow.getStages());
+        return ResponseEntity.ok(payload);
+    }
+
+    @GetMapping("/workflows/{workflowId}/guardrails")
+    public ResponseEntity<Map<String, Object>> getGuardrails(@PathVariable String workflowId) {
+        WorkflowExecution workflow = agenticWorkflowService.getWorkflow(workflowId);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("workflowId", workflow.getId());
+        payload.put("guardrails", workflow.getPolicyGuardrails());
+        payload.put("impactAnalysis", workflow.getImpactAnalysis());
         return ResponseEntity.ok(payload);
     }
 

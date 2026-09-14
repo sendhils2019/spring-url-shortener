@@ -10,8 +10,10 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -38,6 +40,22 @@ class AgenticWorkflowControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.scope").value("greenfield"))
                 .andExpect(jsonPath("$.stages[0].id").value("requirement-analysis"));
+    }
+
+    @Test
+    void workflowBuildsParallelBranchesAndPolicyGuardrailsForBrownfieldChange() throws Exception {
+        WorkflowRequest request = new WorkflowRequest(
+                "Brownfield update for a secure URL shortener with analytics and release policy review.",
+                "brownfield"
+        );
+
+        mockMvc.perform(post("/api/agent/workflows")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(request)))
+                .andExpect(status().isOk())
+                .andExpect(content().string(containsString("risk-review")))
+                .andExpect(content().string(containsString("Brownfield impact analysis")))
+                .andExpect(content().string(containsString("Secret scanning")));
     }
 
     @Test
