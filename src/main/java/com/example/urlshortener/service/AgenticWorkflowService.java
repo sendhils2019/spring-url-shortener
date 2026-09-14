@@ -63,50 +63,77 @@ public class AgenticWorkflowService {
         }
 
         boolean progressed = false;
+        // First pass: start any eligible stages (move pending -> running) to model parallel execution
         for (WorkflowStage stage : workflow.getStages()) {
-            if ("completed".equals(stage.getStatus()) || "blocked".equals(stage.getStatus()) || "failed".equals(stage.getStatus())) {
-                if ("failed".equals(stage.getStatus()) && stage.getRetryCount() < stage.getMaxRetries()) {
-                    stage.setStatus("pending");
-                    stage.setDecision("retrying");
-                    stage.incrementRetryCount();
-                    workflow.addDecision(stage.getId(), "Retry " + stage.getRetryCount() + " of " + stage.getMaxRetries() + " has been scheduled for stage '" + stage.getName() + "'.");
-                    progressed = true;
-                }
+            if (!"pending".equals(stage.getStatus())) {
                 continue;
             }
 
-            if (allDependenciesCompleted(stage, byId)) {
-                if (stage.isRequiresApproval()) {
-                    if (!"approved".equals(stage.getDecision())) {
-                        workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' is waiting for human approval.");
-                        workflow.setStatus("waiting_for_approval");
-                        continue;
-                    }
-                }
+            if (!allDependenciesCompleted(stage, byId)) {
+                continue;
+            }
 
-                if (hasPolicyViolation(stage, workflow)) {
-                    stage.setStatus("blocked");
-                    stage.setDecision("safe-stop");
-                    workflow.setStatus("safe_stopped");
-                    workflow.setApprovalState("rejected");
-                    workflow.setSafeStopReason("Policy guardrails require intervention before this stage may continue.");
-                    workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' was blocked by policy guardrails.");
-                    continue;
-                }
+            if (stage.isRequiresApproval() && !"approved".equals(stage.getDecision())) {
+                workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' is waiting for human approval.");
+                workflow.setStatus("waiting_for_approval");
+                continue;
+            }
 
+            if (hasPolicyViolation(stage, workflow)) {
+                stage.setStatus("blocked");
+                stage.setDecision("safe-stop");
+                workflow.setStatus("safe_stopped");
+                workflow.setApprovalState("rejected");
+                workflow.setSafeStopReason("Policy guardrails require intervention before this stage may continue.");
+                workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' was blocked by policy guardrails.");
+                progressed = true;
+                continue;
+            }
+
+            // Eligible to start: mark as running. This allows multiple stages to be running in parallel.
+            stage.setStatus("running");
+            stage.setDecision("running");
+            workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' started (running).");
+            progressed = true;
+        }
+
+        // Second pass: advance running stages (simulate work completion). Running stages require one or more advance ticks to finish.
+        for (WorkflowStage stage : workflow.getStages()) {
+            if (!"running".equals(stage.getStatus())) {
+                continue;
+            }
+
+            // Simple progress simulation: increment progress and complete when reaching requiredProgress
+            stage.incrementProgress();
+            if (stage.getProgress() >= stage.getRequiredProgress()) {
                 stage.setStatus("completed");
                 stage.setDecision("executed");
                 workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' completed successfully.");
                 progressed = true;
+            } else {
+                workflow.addDecision(stage.getId(), "Stage '" + stage.getName() + "' progressing (" + stage.getProgress() + "/" + stage.getRequiredProgress() + ").");
             }
         }
 
-        if (!progressed && workflow.getStages().stream().allMatch(stage -> "completed".equals(stage.getStatus()))) {
+        // Handle retries for failed stages (allow restarting)
+        for (WorkflowStage stage : workflow.getStages()) {
+            if ("failed".equals(stage.getStatus()) && stage.getRetryCount() < stage.getMaxRetries()) {
+                stage.setStatus("pending");
+                stage.setDecision("retrying");
+                stage.incrementRetryCount();
+                workflow.addDecision(stage.getId(), "Retry " + stage.getRetryCount() + " of " + stage.getMaxRetries() + " has been scheduled for stage '" + stage.getName() + "'.");
+                progressed = true;
+            }
+        }
+
+        // If all stages completed, mark workflow complete
+        if (workflow.getStages().stream().allMatch(stage -> "completed".equals(stage.getStatus()))) {
             workflow.setStatus("completed");
             workflow.setApprovalState("closed");
             workflow.addDecision("All workflow stages finished. Release readiness approved and handoff closed.");
         }
 
+        // If any stage is blocked or safe-stopped, reflect global state
         if (workflow.getStages().stream().anyMatch(stage -> "blocked".equals(stage.getStatus()) || "safe-stop".equals(stage.getDecision()))) {
             workflow.setStatus("safe_stopped");
         }

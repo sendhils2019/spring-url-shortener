@@ -16,6 +16,13 @@ public class WorkflowExecution {
     private String approvalState;
     private final List<String> decisionLog;
 
+    // New fields required by controllers and services
+    private List<String> policyGuardrails;
+    private List<String> impactAnalysis;
+    private List<String> replanNotes;
+    private String rollbackTarget;
+    private String safeStopReason;
+
     public WorkflowExecution(String id, String requirement, String scope, String normalizedProblem, List<WorkflowStage> stages) {
         this.id = id;
         this.requirement = requirement;
@@ -27,6 +34,11 @@ public class WorkflowExecution {
         this.status = "in_progress";
         this.approvalState = "pending";
         this.decisionLog = new ArrayList<>();
+        this.policyGuardrails = new ArrayList<>();
+        this.impactAnalysis = new ArrayList<>();
+        this.replanNotes = new ArrayList<>();
+        this.rollbackTarget = null;
+        this.safeStopReason = null;
     }
 
     public String getId() {
@@ -81,7 +93,62 @@ public class WorkflowExecution {
         return decisionLog;
     }
 
+    // Existing single-arg decision logger
     public void addDecision(String message) {
         this.decisionLog.add(message);
+    }
+
+    // Overload used by services to prefix decisions with a stage id or context
+    public void addDecision(String contextId, String message) {
+        if (contextId == null || contextId.isBlank()) {
+            addDecision(message);
+            return;
+        }
+        this.decisionLog.add("[" + contextId + "] " + message);
+    }
+
+    // Policy guardrails
+    public List<String> getPolicyGuardrails() {
+        return policyGuardrails;
+    }
+
+    public void setPolicyGuardrails(List<String> policyGuardrails) {
+        this.policyGuardrails = policyGuardrails == null ? new ArrayList<>() : new ArrayList<>(policyGuardrails);
+    }
+
+    // Impact analysis
+    public List<String> getImpactAnalysis() {
+        return impactAnalysis;
+    }
+
+    public void setImpactAnalysis(List<String> impactAnalysis) {
+        this.impactAnalysis = impactAnalysis == null ? new ArrayList<>() : new ArrayList<>(impactAnalysis);
+    }
+
+    // Replan notes
+    public List<String> getReplanNotes() {
+        return replanNotes;
+    }
+
+    public void setReplanNotes(List<String> replanNotes) {
+        this.replanNotes = replanNotes == null ? new ArrayList<>() : new ArrayList<>(replanNotes);
+    }
+
+    // Rollback target
+    public String getRollbackTarget() {
+        return rollbackTarget;
+    }
+
+    public void setRollbackTarget(String rollbackTarget) {
+        this.rollbackTarget = rollbackTarget;
+    }
+
+    // Safe-stop reason
+    public String getSafeStopReason() {
+        return safeStopReason;
+    }
+
+    public void setSafeStopReason(String safeStopReason) {
+        this.safeStopReason = safeStopReason;
     }
 }

@@ -16,6 +16,10 @@ public class WorkflowStage {
     private int retryCount;
     private String rollbackTarget;
 
+    // Execution progress simulation to support non-linear / parallel execution
+    private int progress;
+    private int requiredProgress;
+
     public WorkflowStage(String id, String name, String summary, List<String> dependencies, boolean requiresApproval) {
         this(id, name, summary, dependencies, requiresApproval, 2, "main", "linear");
     }
@@ -34,6 +38,13 @@ public class WorkflowStage {
         this.decision = "awaiting";
         this.retryCount = 0;
         this.rollbackTarget = null;
+        this.progress = 0;
+        // default required progress: longer for implementation/testing, shorter for analysis/documentation
+        if ("implementation".equals(id) || "testing".equals(id)) {
+            this.requiredProgress = 2;
+        } else {
+            this.requiredProgress = 1;
+        }
     }
 
     public String getId() {
@@ -66,6 +77,26 @@ public class WorkflowStage {
 
     public void incrementRetryCount() {
         this.retryCount++;
+    }
+
+    public int getProgress() {
+        return progress;
+    }
+
+    public int getRequiredProgress() {
+        return requiredProgress;
+    }
+
+    public void incrementProgress() {
+        this.progress++;
+    }
+
+    public void resetProgress() {
+        this.progress = 0;
+    }
+
+    public void setRequiredProgress(int requiredProgress) {
+        this.requiredProgress = Math.max(1, requiredProgress);
     }
 
     public String getBranch() {
