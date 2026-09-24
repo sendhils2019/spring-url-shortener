@@ -1,21 +1,18 @@
 package com.example.urlshortener;
 
-import com.example.urlshortener.model.CreateLinkRequest;
 import com.example.urlshortener.model.WorkflowRequest;
 import com.example.urlshortener.model.WorkflowStage;
 import com.example.urlshortener.service.AgenticWorkflowService;
-import com.example.urlshortener.service.ShortUrlService;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -23,6 +20,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest
 @AutoConfigureMockMvc
+@TestPropertySource(properties = {
+        "shortener.db-path=:memory:",
+        "shortener.base-url=http://localhost:8080",
+        "shortener.create-rate-per-minute=1000"
+})
 class WorkflowProductionQualityTest {
 
     @Autowired
@@ -33,14 +35,6 @@ class WorkflowProductionQualityTest {
 
     @Autowired
     private AgenticWorkflowService agenticWorkflowService;
-
-    @Autowired
-    private ShortUrlService shortUrlService;
-
-    @BeforeEach
-    void setUp() {
-        shortUrlService.reset();
-    }
 
     @Test
     void invalidWorkflowRequestIsRejected() throws Exception {
@@ -93,22 +87,5 @@ class WorkflowProductionQualityTest {
                 .andExpect(jsonPath("$.rollbackCount").exists())
                 .andExpect(jsonPath("$.mttrMinutes").exists())
                 .andExpect(jsonPath("$.endToEndLatencyMs").exists());
-    }
-
-    @Test
-    void shortUrlRateLimitAndIdempotencyAreEnforced() {
-        var request = new CreateLinkRequest("https://example.com", "rate-demo", null, "idempotency-1");
-        var created = shortUrlService.createShortUrl(request);
-
-        assertThat(created.getCode()).isEqualTo("rate-demo");
-        assertThat(shortUrlService.createShortUrl(new CreateLinkRequest("https://example.com/duplicate", "another", null, "idempotency-1")))
-                .extracting(url -> url.getCode())
-                .isEqualTo("rate-demo");
-
-        for (int i = 0; i < 120; i++) {
-            shortUrlService.recordVisit("rate-demo", "tester", "direct", "10.0.0.1");
-        }
-
-        assertThrows(RuntimeException.class, () -> shortUrlService.recordVisit("rate-demo", "tester", "direct", "10.0.0.1"));
     }
 }

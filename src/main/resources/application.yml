@@ -1,0 +1,24 @@
+server:
+  port: 8080
+
+spring:
+  datasource:
+    url: jdbc:sqlite:${SHORTENER_DB_PATH:shortener.db}
+    driver-class-name: org.sqlite.JDBC
+    hikari:
+      maximum-pool-size: 1
+      connection-test-query: SELECT 1
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    deserialization:
+      fail-on-unknown-properties: true
+
+shortener:
+  db-path: ${SHORTENER_DB_PATH:shortener.db}
+  base-url: ${SHORTENER_BASE_URL:http://localhost:8080}
+  code-length: ${SHORTENER_CODE_LENGTH:7}
+  create-rate-per-minute: ${SHORTENER_CREATE_RATE_PER_MINUTE:60}
+
+springdoc:
+  swagger-ui:
+    path: /docs
